@@ -16,7 +16,7 @@ type family ProducerTF args fun where
     Hyper
       (BaseFunTF (x ': args) (ProducerTF (x ': args) (y -> fun)))
       (ProducerTF (x ': args) (y -> fun))
-  ProducerTF args (v -> res) = Hyper (BaseFunTF args [res]) [res]
+  ProducerTF args (v -> ResultTy res) = Hyper (BaseFunTF args [res]) [res]
   -- TODO: error case
 
 type BaseFunTF :: [Type] -> Type -> Type
@@ -51,12 +51,12 @@ initProducer =
 class ConstProducer args funTy where
   constProducer :: ProducerTF args funTy
 
-instance {-# OVERLAPPABLE #-}
-  ProducerTF args (a -> res) ~ Hyper (BaseFunTF args [res]) [res]
-  => ConstProducer args (a -> res) where
+instance
+  ProducerTF args (a -> ResultTy res) ~ Hyper (BaseFunTF args [res]) [res]
+  => ConstProducer args (a -> ResultTy res) where
   constProducer = k []
 
-instance {-# OVERLAPPING #-}
+instance
   ( ConstProducer (a ': args) (b -> c)
   , ProducerTF args (a -> b -> c) ~
       Hyper
@@ -79,12 +79,192 @@ type family FirstArgTF funTy where
 -- Another possibility is to attach a terminating signifier on the end of
 -- the funTy. This could be a newtype wrapper that is internal.
 
-class AppendProducer a args funTy where
-  appendProducer :: [a] -> ProducerTF args (a -> funTy) -> ProducerTF (a ': args) funTy
+newtype ResultTy a = ResultTy a
+
+type MarkResultTF :: Type -> Type
+type family MarkResultTF funTy where
+  MarkResultTF (a -> b) = a -> MarkResultTF b
+  MarkResultTF a = ResultTy a
+
+-- appendProducer :: [a] -> ProducerTF args (a -> funTy) -> ProducerTF (a ': args) funTy
+
+-- class AppendProducer a args funTy where
+
+-- class FlippedConstProducer args funTy where
+--   flippedConstProducer :: FlipHyperTF (ProducerTF args funTy)
+--
+-- instance
+--   (FlipHyperTF (ProducerTF args (a -> b -> c))
+--     ~ Hyper
+--         (ProducerTF (a ': args) (b -> c))
+--         (BaseFunTF (a ': args) (ProducerTF (a ': args) (b -> c)))
+--   )
+--   => FlippedConstProducer args (a -> b -> c) where
+--   flippedConstProducer = k []
+
+class ConstBaseFunc baseFunArgs args fun where
+  constArgHyp :: BaseFunTF baseFunArgs (ProducerTF args fun)
+
+instance ConstProducer args fun => ConstBaseFunc '[] args fun where
+  constArgHyp = constProducer @args @fun
+
+instance
+  ( ConstBaseFunc baseFunArgs args fun
+  , BaseFunTF (a ': baseFunArgs) (ProducerTF args fun)
+      ~ (a -> BaseFunTF baseFunArgs (ProducerTF args fun))
+  )
+  => ConstBaseFunc (a ': baseFunArgs) args fun where
+  constArgHyp = const (constArgHyp @baseFunArgs @args @fun)
 
 -- type family ZipWithHypTyTF args res where
 --   ZipWithHypTyTF '[] res = [res]
 --   ZipWithHypTyTF (x ': xs) res = x -> ZipWithHypTyTF xs res
+
+pushProducer
+  :: forall args funTy a.
+    ( ConstBaseFunc (a ': args) (a ': args) funTy
+    , ProducerTF args (a -> funTy) ~
+        Hyper
+          (BaseFunTF (a ': args) (ProducerTF (a ': args) funTy))
+          (ProducerTF (a : args) funTy)
+    )
+  => [a] -> ProducerTF args (a -> funTy) -> ProducerTF (a ': args) funTy
+pushProducer as p = invoke p $
+  foldr
+    (pushProducerFold @args @funTy)
+    (k (constArgHyp @(a ': args) @(a ': args) @funTy))
+    as
+
+pushProducerFold
+  :: forall args funTy a.
+      a -> Hyper
+             (ProducerTF (a : args) funTy)
+             (BaseFunTF args (a -> ProducerTF (a : args) funTy))
+        -> Hyper
+             (ProducerTF (a : args) funTy)
+             (BaseFunTF args (a -> ProducerTF (a : args) funTy))
+pushProducerFold = undefined
+
+pushProducerFold'
+  :: forall a b c d.
+    b -> Hyper
+            (ProducerTF '[a] (b -> c -> d))
+            (BaseFunTF '[] (a -> ProducerTF '[a] (b -> c -> d)))
+       -> Hyper
+            (ProducerTF '[a] (b -> c -> d))
+            (BaseFunTF '[] (a -> ProducerTF '[a] (b -> c -> d)))
+pushProducerFold' =
+  push .
+    g
+    . flip
+      (id
+    . flip . flip id)
+  where
+  g :: PartATF '[b,a] (c -> d)
+      -- BaseFunTF '[a]
+      --     ( BaseFunTF '[b, a] (ProducerTF '[b, a] (c -> d))
+      --     -> ProducerTF '[b, a] (c -> d)
+      --     )
+      -- -> ProducerTF '[a] (b -> c -> d)
+      -- -> BaseFunTF '[a]
+      --     (ProducerTF '[a] (b -> c -> d))
+  g = flip . (push .)
+
+pushProducerFold''
+  :: forall a x b c d.
+    b -> Hyper
+            (ProducerTF '[a,x] (b -> c -> d))
+            (BaseFunTF '[x] (a -> ProducerTF '[a,x] (b -> c -> d)))
+       -> Hyper
+            (ProducerTF '[a,x] (b -> c -> d))
+            (BaseFunTF '[x] (a -> ProducerTF '[a,x] (b -> c -> d)))
+pushProducerFold'' =
+  push .
+    g
+    . flip
+      (flip . ((id . flip) .)
+    . flip . flip id)
+  where
+   -- g :: --BaseFunTF [a,x] (ProducerTF [a,x] (b -> c -> d))
+   --    BaseFunTF [a,x] (BaseFunTF [b,a,x] (ProducerTF '[b,a,x] (c -> d)) -> (ProducerTF '[b,a,x] (c -> d)))
+   --    -> x -> ProducerTF '[a,x] (b -> c -> d)
+   --    -> a -> ProducerTF '[a,x] (b -> c -> d)
+   g = -- ((flip . (push .)) .)
+       flip . ((flip . (push .)) .)
+
+pushProducerFold'''
+  :: forall a x b c d y.
+    b -> Hyper
+            (ProducerTF '[a,x,y] (b -> c -> d))
+            (BaseFunTF '[x,y] (a -> ProducerTF '[a,x,y] (b -> c -> d)))
+       -> Hyper
+            (ProducerTF '[a,x,y] (b -> c -> d))
+            (BaseFunTF '[x,y] (a -> ProducerTF '[a,x,y] (b -> c -> d)))
+pushProducerFold''' =
+  push .
+    g
+    . flip
+      (flip . ((flip . (flip .) . flip) .)
+    . flip . flip id)
+  where
+   g :: (y -> x -> a -> a4 -> b1)
+                      -> Hyper a4 b1 -> y -> x -> a -> Hyper a4 b1
+   g = flip . ((flip . ((flip . (push .)) .)) .)
+
+type family PartATF args funTy where
+  PartATF (a ': args) funTy =
+    BaseFunTF args
+         ( BaseFunTF (a ': args) (ProducerTF (a ': args) funTy)
+          -> ProducerTF (a ': args) funTy
+          )
+    -> ProducerTF args (a -> funTy)
+    -> BaseFunTF args (ProducerTF args (a -> funTy))
+
+class FoldComponents args funTy where
+  partA :: PartATF args funTy
+--   partB :: _
+
+instance ProducerTF '[] (x -> funTy) ~ Hyper (x -> ProducerTF '[x] funTy) (ProducerTF '[x] funTy)
+  => FoldComponents '[x] funTy where
+  partA = push
+
+instance
+    (ProducerTF '[y] (x -> funTy)
+      ~ Hyper (y -> x -> ProducerTF [x, y] funTy) (ProducerTF [x, y] funTy)
+    , FoldComponents '[] (y -> x -> funTy)
+      )
+  => FoldComponents '[x,y] funTy where
+  partA = flip . (partA @'[] @(y -> x -> funTy) .)
+
+-- instance FoldComponents (y ': args) (x -> funTy) => FoldComponents (x ': y ': args) funTy where
+--   partA =  flip . ((partA @(y ': args) @(x -> funTy)) .)
+
+  -- push . flip .
+  --   ((flip . (push .)) .)
+  --   . flip
+  --     (flip . ((id . flip) .)
+  --   . flip . flip id)
+
+  -- push . flip .
+  --   (push .)
+  --   . flip
+  --     (flip . flip id)
+
+
+-- How to build 1st foldr arg
+-- (cons . flip .
+--   ((flip . partA) .)
+--   . flip
+--     (flip . ((partB . flip) .)
+--   . flip . flip id))
+--
+-- partA base
+-- (cons .)
+-- partB base
+-- id
+--
+
+
 
 -- zippWith5 :: forall a b c d e f. (a -> b -> c -> d -> e -> f) -> [a] -> [b] -> [c] -> [d] -> [e] -> [f]
 -- zippWith5 f as bs cs ds es =
