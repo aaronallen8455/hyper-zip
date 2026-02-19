@@ -2,6 +2,7 @@
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE AllowAmbiguousTypes #-}
+{-# LANGUAGE TypeFamilyDependencies #-}
 module Zhype
   (
   ) where
@@ -160,7 +161,7 @@ pushProducerFold' =
       (id
     . flip . flip id)
   where
-  g :: PartATF '[b,a] (c -> d)
+  g :: PartATF '[a] (BaseFunTF '[b, a] (ProducerTF '[b, a] (c -> d))) (ProducerTF '[b, a] (c -> d))
       -- BaseFunTF '[a]
       --     ( BaseFunTF '[b, a] (ProducerTF '[b, a] (c -> d))
       --     -> ProducerTF '[b, a] (c -> d)
@@ -180,17 +181,24 @@ pushProducerFold''
             (BaseFunTF '[x] (a -> ProducerTF '[a,x] (b -> c -> d)))
 pushProducerFold'' =
   push .
-    g
+    (partA @[a,x])
     . flip
-      (flip . ((id . flip) .)
+      (g
     . flip . flip id)
   where
    -- g :: --BaseFunTF [a,x] (ProducerTF [a,x] (b -> c -> d))
    --    BaseFunTF [a,x] (BaseFunTF [b,a,x] (ProducerTF '[b,a,x] (c -> d)) -> (ProducerTF '[b,a,x] (c -> d)))
    --    -> x -> ProducerTF '[a,x] (b -> c -> d)
    --    -> a -> ProducerTF '[a,x] (b -> c -> d)
-   g = -- ((flip . (push .)) .)
-       flip . ((flip . (push .)) .)
+   -- g = -- ((flip . (push .)) .)
+   --     flip . ((flip . (push .)) .)
+   g :: (a ->
+          (x -> a -> b -> ProducerTF [b, a, x] (c -> d))
+          -> b -> ProducerTF [b, a, x] (c -> d))
+        -> b -> a
+        -> (x -> a -> b -> ProducerTF [b, a, x] (c -> d))
+        -> ProducerTF [b, a, x] (c -> d)
+   g = flip . ((id . flip) .)
 
 pushProducerFold'''
   :: forall a x b c d y.
@@ -201,43 +209,70 @@ pushProducerFold'''
             (ProducerTF '[a,x,y] (b -> c -> d))
             (BaseFunTF '[x,y] (a -> ProducerTF '[a,x,y] (b -> c -> d)))
 pushProducerFold''' =
-  push .
-    g
-    . flip
-      (flip . ((flip . (flip .) . flip) .)
-    . flip . flip id)
+  push . (partA @[a,x,y]) . flip (g . flip . flip id) --g
   where
-   g :: (y -> x -> a -> a4 -> b1)
-                      -> Hyper a4 b1 -> y -> x -> a -> Hyper a4 b1
-   g = flip . ((flip . ((flip . (push .)) .)) .)
+   -- g :: PartATF '[a,x,y] a4 b1
+   --      -- (y -> x -> a -> a4 -> b1)
+   --      --               -> Hyper a4 b1 -> y -> x -> a -> Hyper a4 b1
+   -- g = partA @[a,x,y] -- flip . (h .)
+   --
+   -- h :: PartATF '[a,x] a4 b1
+   -- h = flip . (i .)
+   --
+   -- i :: PartATF '[a] a4 b1
+   -- i = flip . (j .)
+   --
+   -- j :: PartATF '[] a4 b1
+   -- j = push
+   -- g :: ()
+     --  b -> y -> x -> a -> (y -> x -> a -> b -> ProducerTF [b,a,x,y] (c -> d))
+     -- -> ProducerTF [b,a,x,y] (c -> d)
+   g :: (x ->
+          (y -> x -> a -> b -> ProducerTF [b,a,x,y] (c -> d))
+        -> a
+        -> b
+        -> ProducerTF [b,a,x,y] (c -> d)
+        )
+      -> b -> x -> a ->
+        (y -> x -> a -> b -> ProducerTF [b,a,x,y] (c -> d))
+        -> ProducerTF [b,a,x,y] (c -> d)
+   g = flip . ((flip . (flip .) . flip) .)
+   -- g b y x a f = f y x a b -- flip . ((flip . (flip .) . flip) .)
 
-type family PartATF args funTy where
-  PartATF (a ': args) funTy =
+type family PartATF args h1 h2 where
+  PartATF args h1 h2 =
     BaseFunTF args
-         ( BaseFunTF (a ': args) (ProducerTF (a ': args) funTy)
-          -> ProducerTF (a ': args) funTy
-          )
-    -> ProducerTF args (a -> funTy)
-    -> BaseFunTF args (ProducerTF args (a -> funTy))
+         ( h1 -> h2)
+    -> Hyper h1 h2
+    -> BaseFunTF args (Hyper h1 h2)
 
-class FoldComponents args funTy where
-  partA :: PartATF args funTy
+class FoldComponents args h1 h2 where
+  partA :: PartATF args h1 h2
 --   partB :: _
 
-instance ProducerTF '[] (x -> funTy) ~ Hyper (x -> ProducerTF '[x] funTy) (ProducerTF '[x] funTy)
-  => FoldComponents '[x] funTy where
+instance FoldComponents '[] h1 h2 where
   partA = push
 
 instance
-    (ProducerTF '[y] (x -> funTy)
-      ~ Hyper (y -> x -> ProducerTF [x, y] funTy) (ProducerTF [x, y] funTy)
-    , FoldComponents '[] (y -> x -> funTy)
-      )
-  => FoldComponents '[x,y] funTy where
-  partA = flip . (partA @'[] @(y -> x -> funTy) .)
+    ( '(argsInit, a) ~ UnsnocTF (x ': args)
+    , FoldComponents argsInit h1 h2
+    , BaseFunTF (x ': args) (h1 -> h2) ~ (a -> BaseFunTF argsInit (h1 -> h2))
+    , BaseFunTF (x ': args) (Hyper h1 h2) ~ (a -> BaseFunTF argsInit (Hyper h1 h2))
+    )
+  => FoldComponents (x ': args) h1 h2 where
+  partA f h (a :: a) = (partA @argsInit @h1 @h2) (f a) h
 
--- instance FoldComponents (y ': args) (x -> funTy) => FoldComponents (x ': y ': args) funTy where
---   partA =  flip . ((partA @(y ': args) @(x -> funTy)) .)
+type UnsnocTF :: [Type] -> ([Type], Type)
+type family UnsnocTF xs where
+  UnsnocTF '[x] = '( '[], x)
+  UnsnocTF (x ': xs) = ConsFstTF x (UnsnocTF xs)
+
+type ConsFstTF :: Type -> ([Type], Type) -> ([Type], Type)
+type family ConsFstTF x t = res | res -> x t where
+  ConsFstTF x '(acc, r) = '(x ': acc, r)
+
+-- instance FoldComponents args h1 h2 => FoldComponents (x ': args) h1 h2 where
+--   partA =  flip . ((partA @args @h1 @h2) .)
 
   -- push . flip .
   --   ((flip . (push .)) .)
