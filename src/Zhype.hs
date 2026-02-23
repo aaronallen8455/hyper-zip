@@ -13,11 +13,12 @@ import           Control.Monad.Hyper
 -- Use function type as the arg rather than type lists?
 type ProducerTF :: [Type] -> Type -> Type
 type family ProducerTF args fun where
+  ProducerTF args (x -> y -> ResultTy res) = Hyper (BaseFunTF (x ': args) [res]) [res]
   ProducerTF args (x -> y -> fun) =
     Hyper
       (BaseFunTF (x ': args) (ProducerTF (x ': args) (y -> fun)))
       (ProducerTF (x ': args) (y -> fun))
-  ProducerTF args (v -> ResultTy res) = Hyper (BaseFunTF args [res]) [res]
+  -- ProducerTF args (v -> ResultTy res) = Hyper (BaseFunTF args [res]) [res]
   -- TODO: error case
 
 type BaseFunTF :: [Type] -> Type -> Type
@@ -25,15 +26,6 @@ type family BaseFunTF args rest where
   BaseFunTF (x ': args) rest = BaseFunTF args (x -> rest)
   BaseFunTF '[] done = done
 
--- class ZipWithHyp a where
---   zipWithHyp :: ZipWithHypTyTF a
-
--- separate class to build the producer
-
--- buildProducer :: (x -> fun) -> ProducerTF (x ': args) fun -> [x] -> ProducerTF args fun
--- consumer :: fun -> ProducerTF args  -> [x] -> [ResultTF vars]
-
--- class ConstProducer '[] funTy => InitProducer funTy where
 initProducer ::
   forall funTy firstArg funRest.
   ( ConstProducer '[] funTy
@@ -53,19 +45,13 @@ class ConstProducer args funTy where
   constProducer :: ProducerTF args funTy
 
 instance
-  ProducerTF args (a -> ResultTy res) ~ Hyper (BaseFunTF args [res]) [res]
-  => ConstProducer args (a -> ResultTy res) where
+  ConstProducer args (a -> b -> ResultTy res) where
   constProducer = k []
 
 instance
-  ( ConstProducer (a ': args) (b -> c)
-  , ProducerTF args (a -> b -> c) ~
-      Hyper
-        (BaseFunTF (a ': args) (ProducerTF (a ': args) (b -> c)))
-        (ProducerTF (a ': args) (b -> c))
-  )
-  => ConstProducer args (a -> b -> c) where
-  constProducer = k (constProducer @(a ': args) @(b -> c))
+  ConstProducer (a ': args) (b -> c -> d)
+  => ConstProducer args (a -> b -> c -> d) where
+  constProducer = k (constProducer @(a ': args) @(b -> c -> d))
 
 k :: a -> Hyper b a
 k = pure
@@ -87,22 +73,6 @@ type family MarkResultTF funTy where
   MarkResultTF (a -> b) = a -> MarkResultTF b
   MarkResultTF a = ResultTy a
 
--- appendProducer :: [a] -> ProducerTF args (a -> funTy) -> ProducerTF (a ': args) funTy
-
--- class AppendProducer a args funTy where
-
--- class FlippedConstProducer args funTy where
---   flippedConstProducer :: FlipHyperTF (ProducerTF args funTy)
---
--- instance
---   (FlipHyperTF (ProducerTF args (a -> b -> c))
---     ~ Hyper
---         (ProducerTF (a ': args) (b -> c))
---         (BaseFunTF (a ': args) (ProducerTF (a ': args) (b -> c)))
---   )
---   => FlippedConstProducer args (a -> b -> c) where
---   flippedConstProducer = k []
-
 class ConstBaseFunc baseFunArgs args fun where
   constArgHyp :: BaseFunTF baseFunArgs (ProducerTF args fun)
 
@@ -110,12 +80,13 @@ instance ConstProducer args fun => ConstBaseFunc '[] args fun where
   constArgHyp = constProducer @args @fun
 
 instance
-  ( ConstBaseFunc baseFunArgs args fun
+  ( ConstBaseFunc initFunArgs args fun
+  , '(initFunArgs, b) ~ UnsnocTF (a ': baseFunArgs)
   , BaseFunTF (a ': baseFunArgs) (ProducerTF args fun)
-      ~ (a -> BaseFunTF baseFunArgs (ProducerTF args fun))
+      ~ (b -> BaseFunTF initFunArgs (ProducerTF args fun))
   )
   => ConstBaseFunc (a ': baseFunArgs) args fun where
-  constArgHyp = const (constArgHyp @baseFunArgs @args @fun)
+  constArgHyp = const (constArgHyp @initFunArgs @args @fun)
 
 -- type family ZipWithHypTyTF args res where
 --   ZipWithHypTyTF '[] res = [res]
@@ -149,11 +120,11 @@ pushProducerFold = undefined
 pushProducerFold'
   :: forall a b c d.
     b -> Hyper
-            (ProducerTF '[a] (b -> c -> d))
-            (BaseFunTF '[] (a -> ProducerTF '[a] (b -> c -> d)))
+            (ProducerTF '[a] (b -> c -> ResultTy d))
+            (BaseFunTF '[] (a -> ProducerTF '[a] (b -> c -> ResultTy d)))
        -> Hyper
-            (ProducerTF '[a] (b -> c -> d))
-            (BaseFunTF '[] (a -> ProducerTF '[a] (b -> c -> d)))
+            (ProducerTF '[a] (b -> c -> ResultTy d))
+            (BaseFunTF '[] (a -> ProducerTF '[a] (b -> c -> ResultTy d)))
 pushProducerFold' =
   push .
     (partA @'[a])
@@ -176,17 +147,17 @@ pushProducerFold' =
   --       -> b
   --       -> (a -> b -> ProducerTF [b, a] (c -> d))
   --       -> ProducerTF [b, a] (c -> d)
-  g :: PartBTF '[] b (a -> b -> ProducerTF [b, a] (c -> d)) (ProducerTF [b, a] (c -> d))
+  -- g :: PartBTF '[] b (a -> b -> ProducerTF [b, a] (c -> d)) (ProducerTF [b, a] (c -> d))
   g = id
 
 pushProducerFold''
   :: forall a x b c d.
     b -> Hyper
-            (ProducerTF '[a,x] (b -> c -> d))
-            (BaseFunTF '[x] (a -> ProducerTF '[a,x] (b -> c -> d)))
+            (ProducerTF '[a,x] (b -> c -> ResultTy d))
+            (BaseFunTF '[x] (a -> ProducerTF '[a,x] (b -> c -> ResultTy d)))
        -> Hyper
-            (ProducerTF '[a,x] (b -> c -> d))
-            (BaseFunTF '[x] (a -> ProducerTF '[a,x] (b -> c -> d)))
+            (ProducerTF '[a,x] (b -> c -> ResultTy d))
+            (BaseFunTF '[x] (a -> ProducerTF '[a,x] (b -> c -> ResultTy d)))
 pushProducerFold'' =
   push .
     (partA @[a,x])
@@ -200,70 +171,92 @@ pushProducerFold'' =
    --    -> a -> ProducerTF '[a,x] (b -> c -> d)
    -- g = -- ((flip . (push .)) .)
    --     flip . ((flip . (push .)) .)
-   g :: (a ->
-          (x -> a -> b -> ProducerTF [b, a, x] (c -> d))
-          -> b -> ProducerTF [b, a, x] (c -> d))
-        -> b -> a
-        -> (x -> a -> b -> ProducerTF [b, a, x] (c -> d))
-        -> ProducerTF [b, a, x] (c -> d)
+
+   -- g :: (a ->
+   --        (x -> a -> b -> ProducerTF [b, a, x] (c -> ResultTy d))
+   --        -> b -> ProducerTF [b, a, x] (c -> ResultTy d))
+   --      -> b -> a
+   --      -> (x -> a -> b -> ProducerTF [b, a, x] (c -> ResultTy d))
+   --      -> ProducerTF [b, a, x] (c -> ResultTy d)
    g = flip . ((id . flip) .)
 
 pushProducerFold'''
   :: forall a x b c d y.
     b -> Hyper
-            (ProducerTF '[a,x,y] (b -> c -> d))
-            (BaseFunTF '[x,y] (a -> ProducerTF '[a,x,y] (b -> c -> d)))
+            (ProducerTF '[a,x,y] (b -> c -> ResultTy d))
+            (BaseFunTF '[x,y] (a -> ProducerTF '[a,x,y] (b -> c -> ResultTy d)))
        -> Hyper
-            (ProducerTF '[a,x,y] (b -> c -> d))
-            (BaseFunTF '[x,y] (a -> ProducerTF '[a,x,y] (b -> c -> d)))
+            (ProducerTF '[a,x,y] (b -> c -> ResultTy d))
+            (BaseFunTF '[x,y] (a -> ProducerTF '[a,x,y] (b -> c -> ResultTy d)))
 pushProducerFold''' =
-  push . (partA @[a,x,y]) . flip (g . flip . flip id) --g
-  where
-   -- g :: PartATF '[a,x,y] a4 b1
-   --      -- (y -> x -> a -> a4 -> b1)
-   --      --               -> Hyper a4 b1 -> y -> x -> a -> Hyper a4 b1
-   -- g = partA @[a,x,y] -- flip . (h .)
-   --
-   -- h :: PartATF '[a,x] a4 b1
-   -- h = flip . (i .)
-   --
-   -- i :: PartATF '[a] a4 b1
-   -- i = flip . (j .)
-   --
-   -- j :: PartATF '[] a4 b1
-   -- j = push
-   -- g :: ()
-     --  b -> y -> x -> a -> (y -> x -> a -> b -> ProducerTF [b,a,x,y] (c -> d))
-     -- -> ProducerTF [b,a,x,y] (c -> d)
-   -- g :: (x ->
-   --        (y -> x -> a -> b -> ProducerTF [b,a,x,y] (c -> d))
-   --      -> a
-   --      -> b
-   --      -> ProducerTF [b,a,x,y] (c -> d)
-   --      )
-   --    -> b -> x -> a ->
-   --      (y -> x -> a -> b -> ProducerTF [b,a,x,y] (c -> d))
-   --      -> ProducerTF [b,a,x,y] (c -> d)
-   g :: PartBTF
-          [b, a] x
-          (y -> x -> a -> b -> ProducerTF [b,a,x,y] (c -> d))
-          (ProducerTF [b,a,x,y] (c -> d))
-   g = flip . ((gg . flip) .)
+  push . (partA @[a,x,y])
+       . flip (partB @[b, a] @x . flip . flip id)
 
-   gg :: PartBTF '[b] a
-           (y -> x -> a -> b -> ProducerTF [b,a,x,y] (c -> d))
-           (ProducerTF [b,a,x,y] (c -> d))
-        -- (a -> (y -> x -> a -> b -> ProducerTF [b, a, x, y] ( c -> d))
-        --    -> b
-        --    -> ProducerTF [b, a, x, y] (c -> d))
-        --   -> b
-        --   -> a
-        --   -> (y -> x -> a -> b -> ProducerTF [b, a, x, y] (c -> d))
-        --   -> ProducerTF [b, a, x, y] (c -> d)
-   gg = flip . (flip .)
+-- Hyper
+--     (a
+--      -> Hyper
+--           (a -> b -> Hyper (a -> b -> [d]) [d]) (Hyper (a -> b -> [d]) [d]))
+--     (Hyper
+--        (a -> b -> Hyper (a -> b -> [d]) [d]) (Hyper (a -> b -> [d]) [d]))
+--
+-- Hyper
+--     (a
+--      -> Hyper
+--           (a -> b -> Hyper (a -> b -> [d]) [d]) (Hyper (a -> b -> [d]) [d]))
+--     (Hyper (a -> b -> [d]) [d])
 
-   -- ggg = flip . ((id . flip) .)
-   -- g b y x a f = f y x a b -- flip . ((flip . (flip .) . flip) .)
+zipWith3 :: forall a b c d. (a -> b -> c -> d) -> [a] -> [b] -> [c] -> [d]
+zipWith3 f as bs cs =
+  let p1 -- :: ProducerTF '[] (a -> b -> c -> ResultTy d) -- Hyper (a -> Hyper (a -> b -> [d]) [d]) (Hyper (a -> b -> [d]) [d])
+          :: Hyper (a -> Hyper (a -> b -> [d]) [d]) (Hyper (a -> b -> [d]) [d])
+      p1 = --initProducer @(a -> b -> c -> ResultTy d)
+        foldr
+          (\x -> push ($ x))
+          (constProducer @'[] @(a -> b -> c -> ResultTy d))
+          as
+      p2 :: Hyper (a -> b -> [d]) [d]
+      p2 = invoke p1 $
+            foldr
+              (push .
+                (partA @'[a]) --(\f h a -> push (f a) h)
+                . flip
+                  ( partB @'[]
+                    . flip . flip id)
+                )
+              (k $ constArgHyp @'[a] @'[a] @(b -> c -> ResultTy d))
+              bs
+  in invoke p2
+       (foldr (\c -> push (\r a b -> f a b c : r)) (k (const $ const [])) cs)
+
+zipWith4 :: forall a b c d e. (a -> b -> c -> d -> e) -> [a] -> [b] -> [c] -> [d] -> [e]
+zipWith4 f as bs cs ds =
+  let p1 =
+        foldr
+          (\x -> push ($ x))
+          (constProducer @'[] @(a -> b -> c -> d -> ResultTy e))
+          as
+      p2 = invoke p1 $
+            foldr
+              (push .
+                (partA @'[a])
+                . flip
+                  ( partB @'[]
+                    . flip . flip id)
+                )
+              (k $ constArgHyp @'[a] @'[a] @(b -> c -> d -> ResultTy e))
+              bs
+      p3 = invoke p2 $
+            foldr
+              (push .
+                (partA @'[b, a])
+                . flip
+                  ( partB @'[c]
+                    . flip . flip id)
+                )
+              (k $ constArgHyp @'[b,a] @'[b,a] @(c -> d -> ResultTy e))
+              cs
+  in invoke p3
+       (foldr (\d -> push (\r a b c -> f a b c d : r)) (k (const $ const $ const [])) ds)
 
 type family PartATF args h1 h2 where
   PartATF args h1 h2 =
