@@ -1,5 +1,4 @@
 {-# LANGUAGE DataKinds #-}
-{-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE AllowAmbiguousTypes #-}
 {-# LANGUAGE TypeFamilyDependencies #-}
@@ -41,7 +40,7 @@ initProducer =
     (constProducer @'[] @funTy)
 
 consumer
-  :: forall fun args x y r initArgs l
+  :: forall args x y r fun initArgs l
    . ( '(initArgs, l) ~ UnsnocTF (x ': args)
      , fun ~ (l -> BaseFunTF initArgs (y -> r))
      , BaseFunTF args (x -> r) ~ (l -> BaseFunTF initArgs r)
@@ -503,8 +502,9 @@ zipWith6 f as bs cs ds es fs =
            --      )
            --    (k $ constArgHyp @'[d,c,b,a] @'[d,c,b,a] @(e -> f -> ResultTy g))
            --    es
-  in invoke p5
-       (foldr (\ff -> push (\r a b c d e -> f a b c d e ff : r)) (k (const $ const $ const $ const $ const [])) fs)
+  in consumer @'[d,c,b,a] f p5 fs
+     -- invoke p5
+     --   (foldr (\ff -> push (\r a b c d e -> f a b c d e ff : r)) (k (const $ const $ const $ const $ const [])) fs)
 
 -- push . flip .
 -- ((flip . ((flip . ((flip . ((flip . ((:) .)) .)) .)) .)) .)
