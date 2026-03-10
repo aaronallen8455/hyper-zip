@@ -1,5 +1,5 @@
 cabal-version:      3.0
-name:               zhype
+name:               hyper-zip
 version:            0.1.0.0
 -- synopsis:
 -- description:
@@ -10,7 +10,7 @@ maintainer:         aaronallen8455@gmail.com
 -- copyright:
 category:           Data
 build-type:         Simple
-extra-doc-files:    CHANGELOG.md
+extra-doc-files:    CHANGELOG.md, README.md
 -- extra-source-files:
 
 common warnings
@@ -18,7 +18,7 @@ common warnings
 
 library
     import:           warnings
-    exposed-modules:  Zhype
+    exposed-modules:  HyperZip
     -- other-modules:
     -- other-extensions:
     build-depends:    base ^>=4.21.0.0,
@@ -36,4 +36,4 @@ test-suite zhype-test
     main-is:          Main.hs
     build-depends:
         base ^>=4.21.0.0,
-        zhype
+        hyper-zip
