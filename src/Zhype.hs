@@ -483,7 +483,7 @@ zipWith6 f as bs cs ds es fs =
     --                 )
     --         )
       p4 :: ProducerTF '[c, b, a] (d -> e -> f -> ResultTy g)
-      p4 = produceInter @'[b, a] @_ @_ @_ @(e -> f -> ResultTy g) p3 ds
+      p4 = produceInter @'[b, a] @b @c @d @(e -> f -> ResultTy g) p3 ds
            -- invoke p3 $
            --  foldr
            --    (push .
@@ -506,19 +506,157 @@ zipWith6 f as bs cs ds es fs =
      -- invoke p5
      --   (foldr (\ff -> push (\r a b c d e -> f a b c d e ff : r)) (k (const $ const $ const $ const $ const [])) fs)
 
--- push . flip .
--- ((flip . ((flip . ((flip . ((flip . ((:) .)) .)) .)) .)) .)
--- . flip (flip . ((flip . ((flip . (flip .)) .)) .) . f)
+class Produce fullFun args x y funTy where
+  produce
+    :: fullFun
+    -> ProducerTF args (x -> y -> funTy)
+    -> [y]
+    -> ResultFunTF funTy
 
--- push .
--- {partA}
--- . flip ({partB} . f)
---
--- base partA = ((:) .)
--- (flip . ({partA} .))
---
--- base partB = id
--- (flip . ({partB} .))
+type family ResultFunTF funTy where
+  ResultFunTF (a -> b) = [a] -> ResultFunTF b
+  ResultFunTF (ResultTy a) = [a]
+
+instance
+  ( '(initArgs, l) ~ UnsnocTF (a ': args)
+  , fullFun ~ (l -> BaseFunTF initArgs (b -> c))
+  , BaseFunTF args (a -> c) ~ (l -> BaseFunTF initArgs c)
+  , Monoid (BaseFunTF args (a -> [c]))
+  , ResultPartB (c : b : initArgs)
+  , ResultPartA (c : b : a : args)
+  )
+  => Produce fullFun args a b (ResultTy c) where
+  produce = consumer @args @a @b @c @fullFun @initArgs @l
+
+instance
+  ( '(initArgs, l) ~ UnsnocTF (a ': args)
+  , '(initInitArgs, xx) ~ UnsnocTF initArgs
+  , BaseFunTF args (a -> Hyper (BaseFunTF args (a -> b -> [d])) [d])
+      ~ (l -> BaseFunTF initArgs (Hyper (BaseFunTF args (a -> b -> [d])) [d]))
+  , Produce fullFun (a ': args) b c (ResultTy d)
+  , BaseFunTF args (a -> BaseFunTF args (a -> b -> [d]) -> [d])
+      ~ (l -> BaseFunTF initArgs (BaseFunTF args (a -> b -> [d]) -> [d]))
+  , BaseFunTF (Take1TF (DropLast2TF (b : a : args)))
+      (xx -> BaseFunTF (Drop1TF (DropLast2TF (b : a : args)))
+               ((l -> xx -> BaseFunTF (DropLast2TF (b : a : args)) [d]) -> [d]))
+      ~ (b -> BaseFunTF initArgs (BaseFunTF args (a -> b -> [d]) -> [d]))
+  , ConstBaseFunc initArgs (a : args) (b -> c -> ResultTy d)
+  , FoldComponentB
+      (DropLast2TF (b : a : args))
+      xx
+      (l -> xx -> BaseFunTF (DropLast2TF (b : a : args)) [d])
+      [d]
+  , FoldComponents initArgs (BaseFunTF args (a -> b -> [d])) [d]
+  )
+  => Produce fullFun args a b (c -> ResultTy d) where
+  produce f p
+    = produce @fullFun @(a ': args) @b @c @(ResultTy d) f
+    . produceFinish @args @xx @a @b @c @d @initArgs @l p
+
+instance
+  ( '(initArgs, l) ~ UnsnocTF (a ': args)
+  , '(initInitArgs, xx) ~ UnsnocTF initArgs
+  , BaseFunTF args
+      (a -> BaseFunTF args
+        (a -> b -> Hyper (BaseFunTF args (a -> b -> c -> ProducerTF (c : b : a : args) (d -> e)))
+                         (ProducerTF (c : b : a : args) (d -> e))
+        ) -> Hyper (BaseFunTF args (a -> b -> c -> ProducerTF (c : b : a : args) (d -> e)))
+                      (ProducerTF (c : b : a : args) (d -> e))
+      ) ~
+      (l -> BaseFunTF initArgs
+        (BaseFunTF args
+          (a -> b -> Hyper (BaseFunTF args (a -> b -> c -> ProducerTF (c : b : a : args) (d -> e)))
+            (ProducerTF (c : b : a : args) (d -> e))
+          ) -> Hyper (BaseFunTF args (a -> b -> c -> ProducerTF (c : b : a : args) (d -> e)))
+                     (ProducerTF (c : b : a : args) (d -> e))
+        )
+      )
+  , BaseFunTF args
+      (a -> Hyper (BaseFunTF args
+        (a -> b -> Hyper (BaseFunTF args (a -> b -> c -> ProducerTF (c : b : a : args) (d -> e)))
+                         (ProducerTF (c : b : a : args) (d -> e))
+        )) (Hyper (BaseFunTF args (a -> b -> c -> ProducerTF (c : b : a : args) (d -> e)))
+                     (ProducerTF (c : b : a : args) (d -> e))
+           )
+      ) ~
+      (l -> BaseFunTF initArgs
+        (Hyper (BaseFunTF args (a -> b -> Hyper
+          (BaseFunTF args (a -> b -> c -> ProducerTF (c : b : a : args) (d -> e)))
+          (ProducerTF (c : b : a : args) (d -> e))))
+          (Hyper (BaseFunTF args (a -> b -> c -> ProducerTF (c : b : a : args) (d -> e)))
+            (ProducerTF (c : b : a : args) (d -> e))
+          )
+        )
+      )
+  , BaseFunTF (Take1TF (DropLast2TF (b : a : args)))
+      (xx
+       -> BaseFunTF
+            (Drop1TF (DropLast2TF (b : a : args)))
+            ((l
+              -> xx
+              -> BaseFunTF
+                   (DropLast2TF (b : a : args))
+                   (Hyper
+                      (BaseFunTF
+                         args
+                         (a
+                          -> b -> c -> ProducerTF (c : b : a : args) (d -> e)))
+                      (ProducerTF (c : b : a : args) (d -> e))))
+             -> Hyper
+                  (BaseFunTF
+                     args
+                     (a -> b -> c -> ProducerTF (c : b : a : args) (d -> e)))
+                  (ProducerTF (c : b : a : args) (d -> e))))
+    ~ (b
+       -> BaseFunTF
+            initArgs
+            (BaseFunTF
+               args
+               (a
+                -> b
+                -> Hyper
+                     (BaseFunTF
+                        args
+                        (a -> b -> c -> ProducerTF (c : b : a : args) (d -> e)))
+                     (ProducerTF (c : b : a : args) (d -> e)))
+             -> Hyper
+                  (BaseFunTF
+                     args
+                     (a -> b -> c -> ProducerTF (c : b : a : args) (d -> e)))
+                  (ProducerTF (c : b : a : args) (d -> e))))
+  , ConstBaseFunc initArgs (a : args) (b -> c -> d -> e)
+  , FoldComponents initArgs
+      (BaseFunTF
+         args
+         (a
+          -> b
+          -> Hyper
+               (BaseFunTF
+                  args (a -> b -> c -> ProducerTF (c : b : a : args) (d -> e)))
+               (ProducerTF (c : b : a : args) (d -> e))))
+      (Hyper
+         (BaseFunTF
+            args (a -> b -> c -> ProducerTF (c : b : a : args) (d -> e)))
+         (ProducerTF (c : b : a : args) (d -> e)))
+  , FoldComponentB (DropLast2TF (b : a : args))
+      xx
+      (l
+       -> xx
+       -> BaseFunTF
+            (DropLast2TF (b : a : args))
+            (Hyper
+               (BaseFunTF
+                  args (a -> b -> c -> ProducerTF (c : b : a : args) (d -> e)))
+               (ProducerTF (c : b : a : args) (d -> e))))
+      (Hyper
+         (BaseFunTF
+            args (a -> b -> c -> ProducerTF (c : b : a : args) (d -> e)))
+         (ProducerTF (c : b : a : args) (d -> e)))
+  , Produce fullFun (a : args) b c (d -> e)
+  ) => Produce fullFun args a b (c -> d -> e) where
+  produce f p
+    = produce @fullFun @(a ': args) @b @c @(d -> e) f
+    . produceInter @args @xx @a @b @(c -> d -> e) p
 
 type family PartATF args h1 h2 where
   PartATF args h1 h2 =
@@ -583,75 +721,3 @@ type family UnsnocTF xs where
 type ConsFstTF :: Type -> ([Type], Type) -> ([Type], Type)
 type family ConsFstTF x t = res | res -> x t where
   ConsFstTF x '(acc, r) = '(x ': acc, r)
-
--- instance FoldComponents args h1 h2 => FoldComponents (x ': args) h1 h2 where
---   partA =  flip . ((partA @args @h1 @h2) .)
-
-  -- push . flip .
-  --   ((flip . (push .)) .)
-  --   . flip
-  --     (flip . ((id . flip) .)
-  --   . flip . flip id)
-
-  -- push . flip .
-  --   (push .)
-  --   . flip
-  --     (flip . flip id)
-
-
--- How to build 1st foldr arg
--- (cons . flip .
---   ((flip . partA) .)
---   . flip
---     (flip . ((partB . flip) .)
---   . flip . flip id))
---
--- partA base
--- (cons .)
--- partB base
--- id
---
-
-
-
--- zippWith5 :: forall a b c d e f. (a -> b -> c -> d -> e -> f) -> [a] -> [b] -> [c] -> [d] -> [e] -> [f]
--- zippWith5 f as bs cs ds es =
---   let p1 :: (a -> (a -> b -> (a -> b -> c -> (a -> b -> c -> d -> [f]) -=> [f])
---                      -=> ((a -> b -> c -> d -> [f]) -=> [f]))
---                  -=> ((a -> b -> c -> (a -> b -> c -> d -> [f]) -=> [f])
---                       -=> ((a -> b -> c -> d -> [f]) -=> [f])))
---              -=> ((a -> b -> (a -> b -> c -> (a -> b -> c -> d -> [f]) -=> [f])
---                       -=> ((a -> b -> c -> d -> [f]) -=> [f]))
---                   -=> ((a -> b -> c -> (a -> b -> c -> d -> [f]) -=> [f])
---                        -=> ((a -> b -> c -> d -> [f]) -=> [f])))
---       p1 = foldr
---             (\a -> cons ($ a))
---             (k (k (k (k []))))
---             as
---       p2 :: (a -> b -> (a -> b -> c -> (a -> b -> c -> d -> [f]) -=> [f])
---                -=> ((a -> b -> c -> d -> [f]) -=> [f]))
---            -=> ((a -> b -> c -> (a -> b -> c -> d -> [f]) -=> [f])
---                 -=> ((a -> b -> c -> d -> [f]) -=> [f]))
---       p2 = runHF p1 $
---            foldr
---             (\b -> cons (\acc a -> cons (\g -> g a b) acc))
---             (k (const (k (k (k [])))))
---             bs
---       p3 :: (a -> b -> c -> (a -> b -> c -> d -> [f]) -=> [f])
---            -=> ((a -> b -> c -> d -> [f]) -=> [f])
---       p3 = runHF p2 $
---            foldr
---             (\c -> cons (\acc a b -> cons (\g -> g a b c) acc))
---             (k (const (const (k (k [])))))
---             cs
---       p4 :: (a -> b -> c -> d -> [f]) -=> [f]
---       p4 = runHF p3 $
---            foldr
---             (\d -> cons (\acc a b c -> cons (\g -> g a b c d) acc))
---             (k (const (const (const (k [])))))
---             ds
---   in runHF p4 $
---       foldr
---         (\e -> cons (\acc a b c d -> f a b c d e : acc))
---         (k (const (const (const (const [])))))
---         es
