@@ -3,7 +3,7 @@
 {-# LANGUAGE AllowAmbiguousTypes #-}
 {-# LANGUAGE TypeFamilyDependencies #-}
 module Zhype
-  (
+  ( zipWithN
   ) where
 
 import           Data.Kind
@@ -506,7 +506,7 @@ zipWith6 f as bs cs ds es fs =
      -- invoke p5
      --   (foldr (\ff -> push (\r a b c d e -> f a b c d e ff : r)) (k (const $ const $ const $ const $ const [])) fs)
 
-class Produce fullFun args x y funTy where
+class Produce fullFun args xx x y funTy where
   produce
     :: fullFun
     -> ProducerTF args (x -> y -> funTy)
@@ -525,15 +525,14 @@ instance
   , ResultPartB (c : b : initArgs)
   , ResultPartA (c : b : a : args)
   )
-  => Produce fullFun args a b (ResultTy c) where
+  => Produce fullFun args xx a b (ResultTy c) where
   produce = consumer @args @a @b @c @fullFun @initArgs @l
 
 instance
   ( '(initArgs, l) ~ UnsnocTF (a ': args)
-  , '(initInitArgs, xx) ~ UnsnocTF initArgs
   , BaseFunTF args (a -> Hyper (BaseFunTF args (a -> b -> [d])) [d])
       ~ (l -> BaseFunTF initArgs (Hyper (BaseFunTF args (a -> b -> [d])) [d]))
-  , Produce fullFun (a ': args) b c (ResultTy d)
+  , Produce fullFun (a ': args) xx b c (ResultTy d)
   , BaseFunTF args (a -> BaseFunTF args (a -> b -> [d]) -> [d])
       ~ (l -> BaseFunTF initArgs (BaseFunTF args (a -> b -> [d]) -> [d]))
   , BaseFunTF (Take1TF (DropLast2TF (b : a : args)))
@@ -548,14 +547,13 @@ instance
       [d]
   , FoldComponents initArgs (BaseFunTF args (a -> b -> [d])) [d]
   )
-  => Produce fullFun args a b (c -> ResultTy d) where
+  => Produce fullFun args xx a b (c -> ResultTy d) where
   produce f p
-    = produce @fullFun @(a ': args) @b @c @(ResultTy d) f
+    = produce @fullFun @(a ': args) @xx @b @c @(ResultTy d) f
     . produceFinish @args @xx @a @b @c @d @initArgs @l p
 
 instance
   ( '(initArgs, l) ~ UnsnocTF (a ': args)
-  , '(initInitArgs, xx) ~ UnsnocTF initArgs
   , BaseFunTF args
       (a -> BaseFunTF args
         (a -> b -> Hyper (BaseFunTF args (a -> b -> c -> ProducerTF (c : b : a : args) (d -> e)))
@@ -652,11 +650,23 @@ instance
          (BaseFunTF
             args (a -> b -> c -> ProducerTF (c : b : a : args) (d -> e)))
          (ProducerTF (c : b : a : args) (d -> e)))
-  , Produce fullFun (a : args) b c (d -> e)
-  ) => Produce fullFun args a b (c -> d -> e) where
+  , Produce fullFun (a : args) xx b c (d -> e)
+  ) => Produce fullFun args xx a b (c -> d -> e) where
   produce f p
-    = produce @fullFun @(a ': args) @b @c @(d -> e) f
+    = produce @fullFun @(a ': args) @xx @b @c @(d -> e) f
     . produceInter @args @xx @a @b @(c -> d -> e) p
+
+zipWithN
+  :: forall a b fun funTy.
+    ( funTy ~ MarkResultTF fun
+    , Produce (a -> b -> fun) '[] b a b funTy
+    , ConstProducer '[] (a -> b -> funTy)
+    )
+  => (a -> b -> fun)
+  -> ResultFunTF (a -> b -> funTy)
+zipWithN f
+  = produce @(a -> b -> fun) @'[] @b @a @b @funTy f
+  . initProducer @(a -> b -> funTy) @a
 
 type family PartATF args h1 h2 where
   PartATF args h1 h2 =
