@@ -9,7 +9,12 @@ module HyperZip
 import           Data.Kind
 import           Control.Monad.Hyper
 
--- Used to represent type level lists as function types to optimize core.
+-- Type list optimization:
+-- Instead of using type level lists of types, use a function type:
+-- '[a, b, c]' becomes 'a -> b -> c -> Nil'
+-- This is expected to reduce simplifier output because function types are of
+-- a linear size while lists are quadratic due to type annotations on each cons cell.
+
 data Nil
 
 zipWithN

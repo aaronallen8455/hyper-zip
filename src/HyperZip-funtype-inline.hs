@@ -9,7 +9,12 @@ module HyperZip
 import           Data.Kind
 import           Control.Monad.Hyper
 
--- Used to represent type level lists as function types to optimize core.
+-- Type list optimization:
+-- Instead of using type level lists of types, use a function type:
+-- '[a, b, c]' becomes 'a -> b -> c -> Nil'
+-- This is expected to reduce simplifier output because function types are of
+-- a linear size while lists are quadratic due to type annotations on each cons cell.
+
 data Nil
 
 zipWithN
@@ -78,11 +83,13 @@ class ConstProducer args funTy where
 
 instance
   ConstProducer args (a -> b -> ResultTy res) where
+  {-# INLINEABLE constProducer #-}
   constProducer = k []
 
 instance
   ConstProducer (a -> args) (b -> c -> d)
   => ConstProducer args (a -> b -> c -> d) where
+  {-# INLINEABLE constProducer #-}
   constProducer = k (constProducer @(a -> args) @(b -> c -> d))
 
 k :: a -> Hyper b a
@@ -99,6 +106,7 @@ class ConstBaseFunc baseFunArgs args fun where
   constArgHyp :: BaseFunTF baseFunArgs (ProducerTF args fun)
 
 instance ConstProducer args fun => ConstBaseFunc Nil args fun where
+  {-# INLINEABLE constArgHyp #-}
   constArgHyp = constProducer @args @fun
 
 instance
@@ -108,6 +116,7 @@ instance
       ~ (b -> BaseFunTF initFunArgs (ProducerTF args fun))
   )
   => ConstBaseFunc (a -> baseFunArgs) args fun where
+  {-# INLINEABLE constArgHyp #-}
   constArgHyp = const (constArgHyp @initFunArgs @args @fun)
 
 produceFinish
@@ -223,6 +232,7 @@ class ResultPartA args where
   resultPartA :: ResultPartATF args
 
 instance ResultPartA (a -> b -> c -> Nil) where
+  {-# INLINEABLE resultPartA #-}
   resultPartA f xs c = f c : xs
 
 instance
@@ -233,12 +243,14 @@ instance
     ~ (x -> BaseFunTF restInit (c -> [a]))
   , ResultPartA (a -> b -> c -> restInit)
   ) => ResultPartA (a -> b -> c -> d -> rest) where
+  {-# INLINEABLE resultPartA #-}
   resultPartA = flip . (resultPartA @(a -> b -> c -> restInit) .)
 
 class ResultPartB args where
   resultPartB :: ResultPartBTF args
 
 instance ResultPartB (a -> b -> Nil) where
+  {-# INLINEABLE resultPartB #-}
   resultPartB = id
 
 instance
@@ -249,6 +261,7 @@ instance
     ~ (x -> BaseFunTF restInit (b -> a))
   , ResultPartB (a -> b -> restInit)
   ) => ResultPartB (a -> b -> c -> rest) where
+  {-# INLINEABLE resultPartB #-}
   resultPartB = flip . (resultPartB @(a -> b -> restInit) .)
 
 class Produce fullFun args xx x y funTy where
@@ -271,6 +284,7 @@ instance
   , ResultPartA (c -> b -> a -> args)
   )
   => Produce fullFun args xx a b (ResultTy c) where
+  {-# INLINEABLE produce #-}
   produce = consumer @args @a @b @c @fullFun @initArgs @l
 
 instance
@@ -293,6 +307,7 @@ instance
   , FoldComponents initArgs (BaseFunTF args (a -> b -> [d])) [d]
   )
   => Produce fullFun args xx a b (c -> ResultTy d) where
+  {-# INLINEABLE produce #-}
   produce f p
     = produce @fullFun @(a -> args) @xx @b @c @(ResultTy d) f
     . produceFinish @args @xx @a @b @c @d @initArgs @l p
@@ -397,6 +412,7 @@ instance
          (ProducerTF (c -> b -> a -> args) (d -> e)))
   , Produce fullFun (a -> args) xx b c (d -> e)
   ) => Produce fullFun args xx a b (c -> d -> e) where
+  {-# INLINEABLE produce #-}
   produce f p
     = produce @fullFun @(a -> args) @xx @b @c @(d -> e) f
     . produceInter @args @xx @a @b @(c -> d -> e) p
@@ -428,6 +444,7 @@ class FoldComponents args h1 h2 where
   partA :: PartATF args h1 h2
 
 instance FoldComponents Nil h1 h2 where
+  {-# INLINEABLE partA #-}
   partA = push
 
 instance
@@ -437,12 +454,14 @@ instance
     , BaseFunTF (x -> args) (Hyper h1 h2) ~ (a -> BaseFunTF argsInit (Hyper h1 h2))
     )
   => FoldComponents (x -> args) h1 h2 where
+  {-# INLINEABLE partA #-}
   partA f h (a :: a) = (partA @argsInit @h1 @h2) (f a) h
 
 class FoldComponentB args t1 h1 h2 where
   partB :: PartBTF args t1 h1 h2
 
 instance FoldComponentB Nil x h1 h2 where
+  {-# INLINEABLE partB #-}
   partB = id
 
 instance
@@ -454,6 +473,7 @@ instance
       ~ (a -> BaseFunTF argsInit h2)
   )
   => FoldComponentB (x -> args) y h1 h2 where
+  {-# INLINEABLE partB #-}
   partB f x y = partB @argsInit @a @h1 @h2 (flip $ f y) x
 
 type UnsnocTF :: Type -> (Type, Type)

@@ -14,7 +14,7 @@ extra-doc-files:    CHANGELOG.md, README.md
 -- extra-source-files:
 
 common warnings
-    ghc-options: -Wall
+    ghc-options: -Wall -O2
 
 library
     import:           warnings
@@ -26,7 +26,7 @@ library
     hs-source-dirs:   src
     default-language: GHC2021
 
-test-suite zhype-test
+test-suite hyper-zip-test
     import:           warnings
     default-language: GHC2021
     -- other-modules:
@@ -37,3 +37,30 @@ test-suite zhype-test
     build-depends:
         base ^>=4.21.0.0,
         hyper-zip
+
+executable core-test
+  main-is: Main.hs
+  hs-source-dirs: core-test
+  default-language: GHC2021
+  ghc-options: -freduction-depth=0 -ddump-simpl -ddump-to-file -dno-suppress-coercions -O2
+  build-depends:
+    base ^>=4.21.0.0,
+    hyper-zip
+
+executable fusion-test
+  main-is: FusionTest.hs
+  hs-source-dirs: core-test
+  default-language: GHC2021
+  ghc-options: -O2 -ddump-simpl -ddump-to-file
+  build-depends:
+    base ^>=4.21.0.0,
+    hyper-zip
+
+executable fusion-bench
+  main-is: FusionBench.hs
+  hs-source-dirs: core-test
+  default-language: GHC2021
+  ghc-options: -O2 -rtsopts -ddump-simpl -ddump-to-file
+  build-depends:
+    base ^>=4.21.0.0,
+    hyper-zip
