@@ -1,16 +1,13 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE AllowAmbiguousTypes #-}
-{-# LANGUAGE TypeFamilyDependencies #-}
+{-# LANGUAGE TypeFamilies #-}
 module HyperZip
   ( zipWithN
   ) where
 
 import           Data.Kind
 import           Control.Monad.Hyper
-
--- Used to represent type level lists as function types to optimize core.
-data Nil
 
 zipWithN
   :: forall a b fun funTy.
@@ -23,6 +20,9 @@ zipWithN
 zipWithN f
   = produce @(a -> b -> fun) @Nil @b @a @b @funTy f
   . initProducer @(a -> b -> funTy) @a
+
+-- Used to represent type level lists as function types to optimize core simplification.
+data Nil
 
 -- Use function type as the arg rather than type lists?
 type ProducerTF :: Type -> Type -> Type
@@ -60,16 +60,17 @@ consumer
      , fun ~ (l -> BaseFunTF initArgs (y -> r))
      , BaseFunTF args (x -> r) ~ (l -> BaseFunTF initArgs r)
      , Monoid (BaseFunTF args (x -> [r]))
-     , ResultPartB (r -> y -> initArgs)
-     , ResultPartA (r -> y -> x -> args)
+     , ApplyArg (r -> y -> initArgs)
+     , ConsResult (r -> y -> x -> args)
      )
   => fun -> ProducerTF args (x -> y -> ResultTy r) -> [y] -> [r]
 consumer f p ys = invoke p $
   foldr
-    (push .
-        (resultPartA @(r -> y -> x -> args))
-        . (\y (l :: l) -> (resultPartB @(r -> y -> initArgs)) (f l) y)
-        )
+    (\y ->
+      push $
+        (consResult @(r -> y -> x -> args))
+          (\l -> (applyArg @(r -> y -> initArgs)) (f l) y)
+    )
     (k mempty)
     ys
 
@@ -124,21 +125,23 @@ produceFinish
     , BaseFunTF args (a -> Hyper (BaseFunTF args (a -> b -> [d])) [d])
       ~ (x -> BaseFunTF initArgs (Hyper (BaseFunTF args (a -> b -> [d])) [d]))
     , ConstBaseFunc initArgs (a -> args) (b -> c -> ResultTy d)
-    , FoldComponentB (DropLast2TF (b -> a -> args)) xx
+    , ArgShift (DropLast2TF (b -> a -> args)) xx
         (x -> xx -> BaseFunTF (DropLast2TF (b -> a -> args)) [d])
         [d]
-    , FoldComponents initArgs (BaseFunTF args (a -> b -> [d])) [d]
+    , PushArgFun initArgs (BaseFunTF args (a -> b -> [d])) [d]
     )
   => ProducerTF args (a -> b -> c -> ResultTy d)
   -> [b]
   -> ProducerTF (a -> args) (b -> c -> ResultTy d)
 produceFinish p bs = invoke p $
     foldr
-      (push .
-        (partA @(a -> args) @(BaseFunTF args (a -> b -> [d])) @[d])
-        . flip
-          ( (partB @(DropLast2TF (b -> a -> args)) @xx @_ @(ProducerTF (b -> a -> args) (c -> ResultTy d)))
-            . flip . flip id)
+      (\b ->
+        push
+          ( (pushArgFun @(a -> args) @(BaseFunTF args (a -> b -> [d])) @[d])
+            (\x -> argShift @(DropLast2TF (b -> a -> args)) @xx @_ @(ProducerTF (b -> a -> args) (c -> ResultTy d))
+              (\xx f -> f x xx) b
+            )
+          )
         )
       (k (constArgHyp @(a -> args) @(a -> args) @(b -> c -> ResultTy d)))
       bs
@@ -167,7 +170,7 @@ produceInter
     , ProducerTF (x -> args) (y -> fun)
         ~ Hyper (BaseFunTF args (x -> y -> ProducerTF (y -> x -> args) fun))
                 (ProducerTF (y -> x -> args) fun)
-    , FoldComponents
+    , PushArgFun
         initArgs
         (BaseFunTF args (x -> y -> ProducerTF (y -> x -> args) fun))
         (ProducerTF (y -> x -> args) fun)
@@ -185,7 +188,7 @@ produceInter
               initArgs
               (BaseFunTF args (x -> y -> ProducerTF (y -> x -> args) fun)
                -> ProducerTF (y -> x -> args) fun))
-    , FoldComponentB
+    , ArgShift
         (DropLast2TF (y -> x -> args))
         xx
         (l -> xx -> BaseFunTF (DropLast2TF (y -> x -> args)) (ProducerTF (y -> x -> args) fun))
@@ -196,10 +199,13 @@ produceInter
   -> ProducerTF (x -> args) (y -> fun)
 produceInter p ys = invoke p $
   foldr
-    (push .
-      (partA @(x -> args) @_ @(ProducerTF (y -> x -> args) fun))
-      . (\e a -> partB @(DropLast2TF (y -> x -> args)) @xx @_ @(ProducerTF (y -> x -> args) fun)
-          (\b f -> f a b) e
+    (\y ->
+      push
+        (
+          (pushArgFun @(x -> args) @_ @(ProducerTF (y -> x -> args) fun))
+            (\l -> argShift @(DropLast2TF (y -> x -> args)) @xx @_ @(ProducerTF (y -> x -> args) fun)
+              (\xx f -> f l xx) y
+            )
         )
     )
     (k (constArgHyp @(x -> args) @(x -> args) @(y -> fun)))
@@ -210,20 +216,19 @@ type family DropLast2TF args where
   DropLast2TF (x -> xs) = x -> DropLast2TF xs
 
 -- args in reverse order, e.g. [e,d,c,b,a]
-type family ResultPartATF args where
-  ResultPartATF (resTy -> _ -> args) =
+type family ConsResultTF args where
+  ConsResultTF (resTy -> _ -> args) =
     BaseFunTF args resTy -> [resTy] -> BaseFunTF args [resTy]
 
--- args should be the init of those passed to part A
-type family ResultPartBTF args where
-  ResultPartBTF (resTy -> pen -> args) =
+type family ApplyArgTF args where
+  ApplyArgTF (resTy -> pen -> args) =
     BaseFunTF (pen -> args) resTy -> pen -> BaseFunTF args resTy
 
-class ResultPartA args where
-  resultPartA :: ResultPartATF args
+class ConsResult args where
+  consResult :: ConsResultTF args
 
-instance ResultPartA (a -> b -> c -> Nil) where
-  resultPartA f xs c = f c : xs
+instance ConsResult (a -> b -> c -> Nil) where
+  consResult f xs c = f c : xs
 
 instance
   ( '(restInit, x) ~ UnsnocTF (d -> rest)
@@ -231,15 +236,15 @@ instance
     ~ (x -> BaseFunTF restInit (c -> a))
   , BaseFunTF rest (d -> c -> [a])
     ~ (x -> BaseFunTF restInit (c -> [a]))
-  , ResultPartA (a -> b -> c -> restInit)
-  ) => ResultPartA (a -> b -> c -> d -> rest) where
-  resultPartA = flip . (resultPartA @(a -> b -> c -> restInit) .)
+  , ConsResult (a -> b -> c -> restInit)
+  ) => ConsResult (a -> b -> c -> d -> rest) where
+  consResult f res x = consResult @(a -> b -> c -> restInit) (f x) res
 
-class ResultPartB args where
-  resultPartB :: ResultPartBTF args
+class ApplyArg args where
+  applyArg :: ApplyArgTF args
 
-instance ResultPartB (a -> b -> Nil) where
-  resultPartB = id
+instance ApplyArg (a -> b -> Nil) where
+  applyArg = id
 
 instance
   ( '(restInit, x) ~ UnsnocTF (c -> rest)
@@ -247,9 +252,9 @@ instance
     ~ (x -> BaseFunTF restInit a)
   , BaseFunTF rest (c -> b -> a)
     ~ (x -> BaseFunTF restInit (b -> a))
-  , ResultPartB (a -> b -> restInit)
-  ) => ResultPartB (a -> b -> c -> rest) where
-  resultPartB = flip . (resultPartB @(a -> b -> restInit) .)
+  , ApplyArg (a -> b -> restInit)
+  ) => ApplyArg (a -> b -> c -> rest) where
+  applyArg f b x = applyArg @(a -> b -> restInit) (f x) b
 
 class Produce fullFun args xx x y funTy where
   produce
@@ -267,8 +272,8 @@ instance
   , fullFun ~ (l -> BaseFunTF initArgs (b -> c))
   , BaseFunTF args (a -> c) ~ (l -> BaseFunTF initArgs c)
   , Monoid (BaseFunTF args (a -> [c]))
-  , ResultPartB (c -> b -> initArgs)
-  , ResultPartA (c -> b -> a -> args)
+  , ApplyArg (c -> b -> initArgs)
+  , ConsResult (c -> b -> a -> args)
   )
   => Produce fullFun args xx a b (ResultTy c) where
   produce = consumer @args @a @b @c @fullFun @initArgs @l
@@ -285,12 +290,12 @@ instance
                ((l -> xx -> BaseFunTF (DropLast2TF (b -> a -> args)) [d]) -> [d]))
       ~ (b -> BaseFunTF initArgs (BaseFunTF args (a -> b -> [d]) -> [d]))
   , ConstBaseFunc initArgs (a -> args) (b -> c -> ResultTy d)
-  , FoldComponentB
+  , ArgShift
       (DropLast2TF (b -> a -> args))
       xx
       (l -> xx -> BaseFunTF (DropLast2TF (b -> a -> args)) [d])
       [d]
-  , FoldComponents initArgs (BaseFunTF args (a -> b -> [d])) [d]
+  , PushArgFun initArgs (BaseFunTF args (a -> b -> [d])) [d]
   )
   => Produce fullFun args xx a b (c -> ResultTy d) where
   produce f p
@@ -368,7 +373,7 @@ instance
                      (a -> b -> c -> ProducerTF (c -> b -> a -> args) (d -> e)))
                   (ProducerTF (c -> b -> a -> args) (d -> e))))
   , ConstBaseFunc initArgs (a -> args) (b -> c -> d -> e)
-  , FoldComponents initArgs
+  , PushArgFun initArgs
       (BaseFunTF
          args
          (a
@@ -381,7 +386,7 @@ instance
          (BaseFunTF
             args (a -> b -> c -> ProducerTF (c -> b -> a -> args) (d -> e)))
          (ProducerTF (c -> b -> a -> args) (d -> e)))
-  , FoldComponentB (DropLast2TF (b -> a -> args))
+  , ArgShift (DropLast2TF (b -> a -> args))
       xx
       (l
        -> xx
@@ -401,15 +406,15 @@ instance
     = produce @fullFun @(a -> args) @xx @b @c @(d -> e) f
     . produceInter @args @xx @a @b @(c -> d -> e) p
 
-type family PartATF args h1 h2 where
-  PartATF args h1 h2 =
+type family PushArgFunTF args h1 h2 where
+  PushArgFunTF args h1 h2 =
     BaseFunTF args
          ( h1 -> h2)
     -> Hyper h1 h2
     -> BaseFunTF args (Hyper h1 h2)
 
-type family PartBTF args t1 h1 h2 where
-  PartBTF args t1 h1 h2 =
+type family ArgShiftTF args t1 h1 h2 where
+  ArgShiftTF args t1 h1 h2 =
     ( t1
       -> h1
       -> BaseFunTF args h2)
@@ -424,37 +429,37 @@ type family Drop1TF args where
   Drop1TF (a -> args) = args
   Drop1TF Nil = Nil
 
-class FoldComponents args h1 h2 where
-  partA :: PartATF args h1 h2
+class PushArgFun args h1 h2 where
+  pushArgFun :: PushArgFunTF args h1 h2
 
-instance FoldComponents Nil h1 h2 where
-  partA = push
+instance PushArgFun Nil h1 h2 where
+  pushArgFun = push
 
 instance
     ( '(argsInit, a) ~ UnsnocTF (x -> args)
-    , FoldComponents argsInit h1 h2
+    , PushArgFun argsInit h1 h2
     , BaseFunTF (x -> args) (h1 -> h2) ~ (a -> BaseFunTF argsInit (h1 -> h2))
     , BaseFunTF (x -> args) (Hyper h1 h2) ~ (a -> BaseFunTF argsInit (Hyper h1 h2))
     )
-  => FoldComponents (x -> args) h1 h2 where
-  partA f h (a :: a) = (partA @argsInit @h1 @h2) (f a) h
+  => PushArgFun (x -> args) h1 h2 where
+  pushArgFun f h (a :: a) = (pushArgFun @argsInit @h1 @h2) (f a) h
 
-class FoldComponentB args t1 h1 h2 where
-  partB :: PartBTF args t1 h1 h2
+class ArgShift args t1 h1 h2 where
+  argShift :: ArgShiftTF args t1 h1 h2
 
-instance FoldComponentB Nil x h1 h2 where
-  partB = id
+instance ArgShift Nil x h1 h2 where
+  argShift = id
 
 instance
   ( '(argsInit, a) ~ UnsnocTF (x -> args)
-  , FoldComponentB argsInit a h1 h2
+  , ArgShift argsInit a h1 h2
   , BaseFunTF (Take1TF argsInit) (a -> BaseFunTF (Drop1TF argsInit) (h1 -> h2))
       ~ (x -> BaseFunTF args (h1 -> h2))
   , BaseFunTF args (x -> h2)
       ~ (a -> BaseFunTF argsInit h2)
   )
-  => FoldComponentB (x -> args) y h1 h2 where
-  partB f x y = partB @argsInit @a @h1 @h2 (flip $ f y) x
+  => ArgShift (x -> args) y h1 h2 where
+  argShift f x y = argShift @argsInit @a @h1 @h2 (flip $ f y) x
 
 type UnsnocTF :: Type -> (Type, Type)
 type family UnsnocTF xs where
@@ -462,5 +467,5 @@ type family UnsnocTF xs where
   UnsnocTF (x -> xs) = ConsFstTF x (UnsnocTF xs)
 
 type ConsFstTF :: Type -> (Type, Type) -> (Type, Type)
-type family ConsFstTF x t = res | res -> x t where
+type family ConsFstTF x t where
   ConsFstTF x '(acc, r) = '(x -> acc, r)
